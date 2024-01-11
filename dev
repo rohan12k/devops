@@ -261,6 +261,7 @@ gcloud source repos describe $REPO_NAME --project=$PROJECT_ID
 -----------------------------------------------------------------------------------------------------------------------------------------------------------------
 -----------------------------------------------------------------------------------------------------------------------------------------------------------------
   /////https://github.com/DhruvChaurasia3418/Google-Cloud-Jam-module-8/blob/main/Perform%20Foundational%20Data%2C%20ML%2C%20and%20AI%20Tasks%20in%20Google%20Cloud%3A%20Challenge%20Lab
+///https://www.youtube.com/watch?v=q_PxFoQwMM8&t=87s
 4- perform data,ml
   
 REGION=                 //task-2
