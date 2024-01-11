@@ -1,0 +1,400 @@
+//////////https://github.com/nagaditya39/gcp/tree/main////////////////////
+1-create and manage ---
+https://github.com/QUICK-GCP-LAB/Google-Cloud-Lab-Solutions/blob/main/Create%20and%20Manage%20Cloud%20Resources%20Challenge%20Lab.md#task-1-create-a-project-jumphost-instance
+  ---------------
+export INSTANCE=   //copy from side as instance name
+export PORT_NO=     //same port number
+export FIREWALL=     //same firewall rule
+export REGION=        //task 2 step 1 take out last term west-b ->west
+export ZONE=         //task 2 step1
+//Task 1. Create a project jumphost instance
+gcloud compute instances create $INSTANCE \
+    --zone=$ZONE \
+    --machine-type=e2-micro
+//Task 2. Create a Kubernetes service cluster
+gcloud container clusters create nucleus-backend \
+    --num-nodes=1 \
+    --zone=$ZONE
+gcloud container clusters get-credentials nucleus-backend \
+          --zone $ZONE
+kubectl create deployment hello-server \
+          --image=gcr.io/google-samples/hello-app:2.0
+kubectl expose deployment hello-server \
+          --type=LoadBalancer \
+          --port $PORT_NO
+//Task 3. Set up an HTTP load balancer
+cat << EOF > startup.sh
+#! /bin/bash
+apt-get update
+apt-get install -y nginx
+service nginx start
+sed -i -- 's/nginx/Google Cloud Platform - '"\$HOSTNAME"'/' /var/www/html/index.nginx-debian.html
+EOF
+gcloud compute instance-templates create web-server-template \
+       --metadata-from-file startup-script=startup.sh \
+       --machine-type g1-small \
+       --region $REGION
+gcloud compute target-pools create nginx-pool --region $REGION
+gcloud compute instance-groups managed create web-server-group \
+--base-instance-name web-server \
+--size 2 \
+--template web-server-template \
+--region $REGION
+gcloud compute firewall-rules create $FIREWALL \
+       --allow tcp:80
+gcloud compute http-health-checks create http-basic-check
+gcloud compute instance-groups managed \
+       set-named-ports web-server-group \
+       --named-ports http:80 \
+       --region $REGION
+gcloud compute backend-services create web-server-backend \
+       --protocol HTTP \
+       --http-health-checks http-basic-check \
+       --global
+gcloud compute backend-services add-backend web-server-backend \
+       --instance-group web-server-group \
+       --instance-group-region $REGION \
+       --global
+gcloud compute url-maps create web-server-map \
+       --default-service web-server-backend
+gcloud compute target-http-proxies create http-lb-proxy \
+       --url-map web-server-map
+gcloud compute forwarding-rules create $FIREWALL \
+     --global \
+     --target-http-proxy http-lb-proxy \
+     --ports 80
+gcloud compute forwarding-rules list
+
+
+
+//////////////////////////////////////////////////
+         //////////////////////////////////////////
+         ////////////////////////////////////////
+
+2- deploy to kuber
+----take care of zone etc-----
+Docker_Image_and_Tag_Name=""  ///task-2 valkyrie-dev:v0.0.1 inside quotes
+REPOSITORY=""   ///task-3 valkyrie-repository inside quotes
+PROJECT_ID=""   
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------
+Task 1:-
+
+gcloud auth list
+gsutil cat gs://cloud-training/gsp318/marking/setup_marking_v2.sh | bash
+gcloud source repos clone valkyrie-app
+cd valkyrie-app
+cat > Dockerfile <<EOF
+FROM golang:1.10
+WORKDIR /go/src/app
+COPY source .
+RUN go install -v
+ENTRYPOINT ["app","-single=true","-port=8080"]
+EOF
+docker build -t $Docker_Image_and_Tag_Name .
+cd ..
+cd marking
+./step1_v2.sh
+
+
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Task 2:-
+cd ..
+cd valkyrie-app
+docker run -p 8080:8080 $Docker_Image_and_Tag_Name &
+cd ..
+cd marking
+./step2_v2.sh
+bash ~/marking/step2_v2.sh
+
+
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+Task 3:-
+
+cd ..
+cd valkyrie-app
+
+gcloud artifacts repositories create $REPOSITORY \
+    --repository-format=docker \
+    --location=us-central1 \
+    --description="subcribe to quciklab" \
+    --async 
+
+gcloud auth configure-docker us-central1-docker.pkg.dev
+
+docker images
+--------------------------------------------------------------------------------------------------
+copy image id that will be obtained on console after task 3 and paste it inplace of <Image_ID>
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+docker tag <Image_ID> us-central1-docker.pkg.dev/$PROJECT_ID/$REPOSITORY/$Docker_Image_and_Tag_Name
+
+docker push us-central1-docker.pkg.dev/$PROJECT_ID/$REPOSITORY/$Docker_Image_and_Tag_Name
+
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+
+
+Task 4:-
+
+sed -i s#IMAGE_HERE#us-central1-docker.pkg.dev/$PROJECT_ID/$REPOSITORY/$Docker_Image_and_Tag_Name#g k8s/deployment.yaml
+
+gcloud container clusters get-credentials valkyrie-dev --zone us-east1-d
+kubectl create -f k8s/deployment.yaml
+kubectl create -f k8s/service.yaml
+
+
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------
+/////////////////////////////////////////https://www.youtube.com/watch?v=FnEjvOwAvgg//////\
+3- implement devops
+  -----------------
+  gcloud services enable container.googleapis.com \
+    cloudbuild.googleapis.com \
+    sourcerepo.googleapis.com
+
+
+export PROJECT_ID=$(gcloud config get-value project)
+export REGION="us-east4"
+export ZONE="us-east4-c"
+export REPOSITORY_NAME="my-repository"
+export CLUSTER_NAME="hello-cluster"
+export REPO_NAME="sample-app"
+
+
+gcloud projects add-iam-policy-binding $PROJECT_ID \
+--member=serviceAccount:$(gcloud projects describe $PROJECT_ID \
+--format="value(projectNumber)")@cloudbuild.gserviceaccount.com --role="roles/container.developer"
+
+
+git config --global user.email <email>
+git config --global user.name <name>
+
+
+
+
+# Create a Docker repository in Artifact Registry
+gcloud artifacts repositories create $REPOSITORY_NAME \
+    --repository-format=docker \
+    --location=$REGION \
+    --project=$PROJECT_ID
+
+
+
+# Create a GKE cluster
+gcloud container clusters create $CLUSTER_NAME \
+    --zone=$ZONE \
+    --release-channel=regular \
+    --cluster-version=1.27.3-gke.100 \
+    --enable-autoscaling \
+    --num-nodes=3 \
+    --min-nodes=2 \
+    --max-nodes=6
+
+
+# Set your cluster context
+gcloud container clusters get-credentials $CLUSTER_NAME --zone=$ZONE
+
+# Create prod and dev namespaces
+kubectl create namespace prod
+kubectl create namespace dev
+
+
+
+# Create the repository
+gcloud source repos create $REPO_NAME --project=$PROJECT_ID
+
+# Clone the repository
+gcloud source repos clone $REPO_NAME --project=$PROJECT_ID
+
+
+# Change to the home directory
+cd ~
+
+# Copy the sample code
+gsutil cp -r gs://spls/gsp330/sample-app/* sample-app
+
+
+# Replace placeholders in the Cloud Build files
+for file in sample-app/cloudbuild-dev.yaml sample-app/cloudbuild.yaml; do
+    sed -i "s/<your-region>/${REGION}/g" "$file"
+    sed -i "s/<your-zone>/${ZONE}/g" "$file"
+done
+
+# Change to the sample-app directory
+cd sample-app
+
+# Initialize a git repository
+git init
+
+# Add all files
+git add .
+
+# Commit changes
+git commit -m "Initial commit"
+
+
+# Push changes to the master branch
+git push -u origin master
+
+
+# Create and switch to the dev branch
+git checkout -b dev
+
+# Make a commit
+# (You can make changes to the code or simply use the same commit message)
+git commit -m "Commit to dev branch"
+
+# Push changes to the dev branch
+git push -u origin dev
+
+
+gcloud source repos describe $REPO_NAME --project=$PROJECT_ID
+
+
+
+
+
+  
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! END OF LAB !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------
+  /////https://github.com/DhruvChaurasia3418/Google-Cloud-Jam-module-8/blob/main/Perform%20Foundational%20Data%2C%20ML%2C%20and%20AI%20Tasks%20in%20Google%20Cloud%3A%20Challenge%20Lab
+4- perform data,ml
+  
+REGION=                 //task-2
+Dataset=                 //left panel bigquerrydataset name
+TABLE=                   //task1 in tabel BigQuery output table- after bigquerrydataset name copy it
+TASK_3=                //taske-3 upload the resulting file to:
+TASK_4=          //task -4 upload the resulting file to: 
+
+PROJECT_ID=$(gcloud config get-value project)
+target=$Dataset.$TABLE
+bucket_name=$PROJECT_ID-marking
+
+bq mk $Dataset
+gsutil mb gs://$bucket_name
+-----------------------------------------------------------------------------------------------------------------------------
+
+cat > table.py <<EOF
+from google.cloud import bigquery
+
+# Construct a BigQuery client object.
+client = bigquery.Client()
+
+
+table_id = "$PROJECT_ID.$Dataset.TABLE"
+
+schema = [
+    bigquery.SchemaField("guid", "STRING", mode="NULLABLE"),
+    bigquery.SchemaField("isActive", "BOOLEAN", mode="NULLABLE"),
+    bigquery.SchemaField("firstname", "STRING", mode="NULLABLE"),
+    bigquery.SchemaField("surname", "STRING", mode="NULLABLE"),
+    bigquery.SchemaField("company", "STRING", mode="NULLABLE"),
+    bigquery.SchemaField("email", "STRING", mode="NULLABLE"),
+    bigquery.SchemaField("phone", "STRING", mode="NULLABLE"),
+    bigquery.SchemaField("address", "STRING", mode="NULLABLE"),
+    bigquery.SchemaField("about", "STRING", mode="NULLABLE"),
+    bigquery.SchemaField("registered", "TIMESTAMP", mode="NULLABLE"),
+    bigquery.SchemaField("latitude", "FLOAT", mode="NULLABLE"),
+    bigquery.SchemaField("longitude", "FLOAT", mode="NULLABLE"),
+]
+
+table = bigquery.Table(table_id, schema=schema)
+table = client.create_table(table)  # Make an API request.
+print(
+    "Created table {}.{}.{}".format(table.project, table.dataset_id, table.table_id)
+)
+EOF
+
+--------------------------------------------------------------------------------------------------------------------------
+python3 table.py
+
+gcloud dataflow jobs run lab-transform --gcs-location gs://dataflow-templates-$REGION/latest/GCS_Text_to_BigQuery --worker-machine-type e2-standard-2 --region $REGION --staging-location gs://$PROJECT_ID-marking/temp --parameters javascriptTextTransformGcsPath=gs://cloud-training/gsp323/lab.js,JSONPath=gs://cloud-training/gsp323/lab.schema,javascriptTextTransformFunctionName=transform,outputTable=$PROJECT_ID:$Dataset.$TABLE,inputFilePattern=gs://cloud-training/gsp323/lab.csv,bigQueryLoadingTemporaryDirectory=gs://$PROJECT_ID-marking/bigquery_temp
+
+--------------------------------------------------------------------------------------------------------------------------
+
+
+gcloud dataproc clusters create cluster-f357 --region $REGION --zone $REGION-a --master-machine-type e2-standard-2 --master-boot-disk-size 500 --num-workers 2 --worker-machine-type e2-standard-2 --worker-boot-disk-size 500 --image-version 2.0-debian10 --project $PROJECT_ID
+
+
+--------------------------------------------------------------------------------------------------------------------------
+--------------------------------------------------------------------------------------------------------------------------
+gcloud beta compute ssh cluster-f357-w-0 -- -vvv
+
+--------------------------------------------------------------------------------------------------------------------------
+
+
+hdfs dfs -cp gs://cloud-training/gsp323/data.txt /data.txt
+
+
+--------------------------------------------------------------------------------------------------------------------------
+
+gcloud config set dataproc/region $REGION
+gcloud dataproc jobs submit spark --cluster cluster-f357 \
+  --class org.apache.spark.examples.SparkPageRank \
+  --cluster=cluster-f357 \
+  --jars file:///usr/lib/spark/examples/jars/spark-examples.jar -- /data.txt
+
+
+--------------------------------------------------------------------------------------------------------------------------
+
+gcloud services enable apikeys.googleapis.com
+gcloud alpha services api-keys create --display-name="testname" 
+KEY_NAME=$(gcloud alpha services api-keys list --format="value(name)" --filter "displayName=testname")
+API_KEY=$(gcloud alpha services api-keys get-key-string $KEY_NAME --format="value(keyString)")
+echo $API_KEY
+
+
+--------------------------------------------------------------------------------------------------------------------------
+
+gcloud iam service-accounts create techvine \
+  --display-name "my natural language service account"
+gcloud iam service-accounts keys create ~/key.json \
+  --iam-account techvine@${GOOGLE_CLOUD_PROJECT}.iam.gserviceaccount.com
+export GOOGLE_APPLICATION_CREDENTIALS="/home/$USER/key.json"
+gcloud auth activate-service-account techvine@${GOOGLE_CLOUD_PROJECT}.iam.gserviceaccount.com --key-file=$GOOGLE_APPLICATION_CREDENTIALS
+gcloud ml language analyze-entities --content="Old Norse texts portray Odin as one-eyed and long-bearded, frequently wielding a spear named Gungnir and wearing a cloak and a broad hat." > result.json
+gcloud auth login --no-launch-browser
+
+
+--------------------------------------------------------------------------------------------------------------------------
+
+gsutil cp result.json $TASK_4
+cat > request.json <<EOF 
+{
+  "config": {
+      "encoding":"FLAC",
+      "languageCode": "en-US"
+  },
+  "audio": {
+      "uri":"gs://cloud-training/gsp323/task3.flac"
+  }
+}
+EOF
+curl -s -X POST -H "Content-Type: application/json" --data-binary @request.json \
+"https://speech.googleapis.com/v1/speech:recognize?key=${API_KEY}" > result.json
+gsutil cp result.json $TASK_3
+gcloud iam service-accounts create quickstart
+gcloud iam service-accounts keys create key.json --iam-account quickstart@${GOOGLE_CLOUD_PROJECT}.iam.gserviceaccount.com
+gcloud auth activate-service-account --key-file key.json
+export ACCESS_TOKEN=$(gcloud auth print-access-token)
+cat > request.json <<EOF 
+{
+   "inputUri":"gs://spls/gsp154/video/train.mp4",
+   "features": [
+       "TEXT_DETECTION"
+   ]
+}
+EOF
+
+--------------------------------------------------------------------------------------------------------------------------
+
+curl -s -H 'Content-Type: application/json' \
+    -H "Authorization: Bearer $ACCESS_TOKEN" \
+    'https://videointelligence.googleapis.com/v1/videos:annotate' \
+    -d @request.json
+curl -s -H 'Content-Type: application/json' -H "Authorization: Bearer $ACCESS_TOKEN" 'https://videointelligence.googleapis.com/v1/operations/OPERATION_FROM_PREVIOUS_REQUEST' > result1.json
+
+
